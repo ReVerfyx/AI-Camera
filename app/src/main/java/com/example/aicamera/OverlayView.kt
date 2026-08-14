@@ -71,8 +71,8 @@ class OverlayView @JvmOverloads constructor(
         text.textSize = 22f
         c.drawText("AI CAMERA", 24f, 40f, text)
         text.textSize = 15f
-        c.drawText("Возраст: —", 24f, 65f, text)
-        c.drawText("Вес: —", 24f, 88f, text)
+        c.drawText("Люди (лица): ${faces.size}", 24f, 65f, text)
+        c.drawText("Объекты: ${detections.size}", 24f, 88f, text)
 
         drawPose(c, pose)
         hands.forEach { drawHand(c, it) }
@@ -188,9 +188,14 @@ class OverlayView @JvmOverloads constructor(
     private fun drawDetection(c: Canvas, d: Detection) {
         val tl = xy(P(d.rect.left, d.rect.top))
         val br = xy(P(d.rect.right, d.rect.bottom))
+        val inHand = d.label.endsWith("• in hand")
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = if (d.danger) 6f else 4f
-        paint.color = if (d.danger) Color.RED else Color.GREEN
+        paint.color = when {
+            d.danger -> Color.RED
+            inHand -> Color.rgb(255, 165, 0) // оранжевый — предмет в руке
+            else -> Color.GREEN
+        }
         c.drawRect(min(tl.x, br.x), min(tl.y, br.y), max(tl.x, br.x), max(tl.y, br.y), paint)
         paint.style = Paint.Style.FILL
         text.textSize = 18f

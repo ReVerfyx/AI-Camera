@@ -9,8 +9,12 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
+import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import kotlin.math.sqrt
+
+// COCO labels где предмет в руке потенциально опасен — подсвечиваем красным.
+private val DANGER_LABELS = setOf("knife", "scissors", "baseball bat")
 
 class VisionAnalyzer(
     private val context: Context,
@@ -20,6 +24,7 @@ class VisionAnalyzer(
     private val face: FaceLandmarker
     private val hands: HandLandmarker
     private val pose: PoseLandmarker
+    private val objects: ObjectDetector
 
     private var lastFpsTime = System.currentTimeMillis()
     private var frameCount = 0
@@ -31,7 +36,7 @@ class VisionAnalyzer(
             FaceLandmarker.FaceLandmarkerOptions.builder()
                 .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
                 .setRunningMode(RunningMode.VIDEO)
-                .setNumFaces(2)
+                .setNumFaces(4) // несколько лиц/людей в кадре
                 .build()
         )
 
@@ -40,7 +45,7 @@ class VisionAnalyzer(
             HandLandmarker.HandLandmarkerOptions.builder()
                 .setBaseOptions(BaseOptions.builder().setModelAssetPath("hand_landmarker.task").build())
                 .setRunningMode(RunningMode.VIDEO)
-                .setNumHands(2)
+                .setNumHands(4)
                 .build()
         )
 
@@ -49,7 +54,19 @@ class VisionAnalyzer(
             PoseLandmarker.PoseLandmarkerOptions.builder()
                 .setBaseOptions(BaseOptions.builder().setModelAssetPath("pose_landmarker_lite.task").build())
                 .setRunningMode(RunningMode.VIDEO)
-                .setNumPoses(1)
+                .setNumPoses(4)
+                .build()
+        )
+
+        // Общий детектор предметов: 80 классов COCO — человек, кошка, собака,
+        // бутылка, телефон, книга, нож, ножницы, сумка и т.д.
+        objects = ObjectDetector.createFromOptions(
+            context,
+            ObjectDetector.ObjectDetectorOptions.builder()
+                .setBaseOptions(BaseOptions.builder().setModelAssetPath("efficientdet_lite2.tflite").build())
+                .setRunningMode(RunningMode.VIDEO)
+                .setMaxResults(20)
+                .setScoreThreshold(0.4f)
                 .build()
         )
     }
@@ -64,6 +81,7 @@ class VisionAnalyzer(
             val faceResult = face.detectForVideo(mpImage, timestamp)
             val handResult = hands.detectForVideo(mpImage, timestamp)
             val poseResult = pose.detectForVideo(mpImage, timestamp)
+            val objectResult = objects.detectForVideo(mpImage, timestamp)
 
             val faces = faceResult.faceLandmarks().map { list ->
                 list.map { P(it.x(), it.y()) }
@@ -74,6 +92,43 @@ class VisionAnalyzer(
             val posePoints = if (poseResult.landmarks().isNotEmpty()) {
                 poseResult.landmarks()[0].map { P(it.x(), it.y()) }
             } else emptyList()
+
+            // Центр ладони каждой руки (для привязки "предмет в руке").
+            val palmCenters = handPoints.mapNotNull { h ->
+                if (h.size < 21) null
+                else {
+                    val ids = listOf(0, 5, 9, 13, 17)
+                    val cx = ids.map { h[it].x }.average().toFloat()
+                    val cy = ids.map { h[it].y }.average().toFloat()
+                    P(cx, cy)
+                }
+            }
+
+            val w = rotated.width.toFloat()
+            val h = rotated.height.toFloat()
+            val detections = objectResult.detections().mapNotNull { d ->
+                val cat = d.categories().firstOrNull() ?: return@mapNotNull null
+                val box = d.boundingBox() // пиксели исходного (повёрнутого) кадра
+                val rect = android.graphics.RectF(
+                    (box.left / w).coerceIn(0f, 1f),
+                    (box.top / h).coerceIn(0f, 1f),
+                    (box.right / w).coerceIn(0f, 1f),
+                    (box.bottom / h).coerceIn(0f, 1f)
+                )
+                val label = cat.categoryName() ?: "object"
+                val held = palmCenters.any { p ->
+                    val padX = (rect.width() * 0.3f).coerceAtLeast(0.02f)
+                    val padY = (rect.height() * 0.3f).coerceAtLeast(0.02f)
+                    p.x in (rect.left - padX)..(rect.right + padX) &&
+                        p.y in (rect.top - padY)..(rect.bottom + padY)
+                }
+                Detection(
+                    rect = rect,
+                    label = if (held) "$label • in hand" else label,
+                    score = cat.score(),
+                    danger = label in DANGER_LABELS
+                )
+            }
 
             val expression = if (faces.isNotEmpty()) classifyExpression(faces[0]) else "NO FACE"
 
@@ -91,7 +146,7 @@ class VisionAnalyzer(
                 faces = faces,
                 hands = handPoints,
                 pose = posePoints,
-                detections = emptyList(),
+                detections = detections,
                 expression = expression,
                 fps = fps
             )
