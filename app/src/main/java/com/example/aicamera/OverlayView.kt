@@ -28,7 +28,7 @@ class OverlayView @JvmOverloads constructor(
 
     private var faces = emptyList<List<P>>()
     private var hands = emptyList<List<P>>()
-    private var pose = emptyList<P>()
+    private var poses = emptyList<List<P>>()
     private var detections = emptyList<Detection>()
     private var expression = "FACE"
     private var fps = 0f
@@ -45,14 +45,14 @@ class OverlayView @JvmOverloads constructor(
     fun update(
         faces: List<List<P>>,
         hands: List<List<P>>,
-        pose: List<P>,
+        poses: List<List<P>>,
         detections: List<Detection>,
         expression: String,
         fps: Float
     ) {
         this.faces = faces
         this.hands = hands
-        this.pose = pose
+        this.poses = poses
         this.detections = detections
         this.expression = expression
         this.fps = fps
@@ -62,19 +62,19 @@ class OverlayView @JvmOverloads constructor(
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
 
-        // Header similar to the reference, without covering the camera too much.
         paint.style = Paint.Style.FILL
-        paint.color = Color.argb(175, 0, 0, 0)
-        c.drawRect(12f, 12f, 360f, 112f, paint)
+        paint.color = Color.argb(165, 0, 0, 0)
+        c.drawRect(12f, 12f, 365f, 112f, paint)
 
         text.color = Color.WHITE
         text.textSize = 22f
         c.drawText("AI CAMERA", 24f, 40f, text)
         text.textSize = 15f
-        c.drawText("Люди (лица): ${faces.size}", 24f, 65f, text)
-        c.drawText("Объекты: ${detections.size}", 24f, 88f, text)
+        c.drawText("Возраст: —", 24f, 64f, text)
+        c.drawText("Вес: —", 24f, 86f, text)
+        c.drawText("Людей: ${faces.size.coerceAtMost(2)}  Объектов: ${detections.size}", 24f, 106f, text)
 
-        drawPose(c, pose)
+        poses.forEach { drawPose(c, it) }
         hands.forEach { drawHand(c, it) }
         faces.forEach { drawFace(c, it) }
         detections.forEach { drawDetection(c, it) }
@@ -87,9 +87,6 @@ class OverlayView @JvmOverloads constructor(
         c.drawText("FPS: %.1f".format(fps), 18f, height - 20f, text)
     }
 
-    /** Maps normalized MediaPipe coordinates to PreviewView coordinates.
-     * PreviewView uses fillCenter, so the same center-crop must be applied here.
-     */
     private fun xy(p: P): PointF {
         val vw = width.toFloat()
         val vh = height.toFloat()
@@ -123,8 +120,8 @@ class OverlayView @JvmOverloads constructor(
         }
         paint.style = Paint.Style.FILL
         paint.color = Color.YELLOW
-        for (point in p) {
-            val q = xy(point)
+        p.forEach {
+            val q = xy(it)
             c.drawCircle(q.x, q.y, 4f, paint)
         }
     }
@@ -156,30 +153,27 @@ class OverlayView @JvmOverloads constructor(
 
     private fun drawFace(c: Canvas, face: List<P>) {
         if (face.isEmpty()) return
-
         var minX = 1f; var minY = 1f; var maxX = 0f; var maxY = 0f
         face.forEach {
             minX = min(minX, it.x); minY = min(minY, it.y)
             maxX = max(maxX, it.x); maxY = max(maxY, it.y)
         }
-
         val a = xy(P(minX, minY))
         val b = xy(P(maxX, maxY))
-        val rect = RectF(min(a.x, b.x) - 8f, min(a.y, b.y) - 8f,
-            max(a.x, b.x) + 8f, max(a.y, b.y) + 8f)
-
+        val rect = RectF(
+            min(a.x, b.x) - 8f, min(a.y, b.y) - 8f,
+            max(a.x, b.x) + 8f, max(a.y, b.y) + 8f
+        )
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 3f
         paint.color = Color.YELLOW
         c.drawRect(rect, paint)
-
         paint.style = Paint.Style.FILL
         paint.color = Color.GREEN
         face.forEach {
             val q = xy(it)
             c.drawCircle(q.x, q.y, 1.4f, paint)
         }
-
         text.textSize = 18f
         text.color = Color.GREEN
         c.drawText("person", rect.left, max(125f, rect.top - 8f), text)
@@ -189,18 +183,22 @@ class OverlayView @JvmOverloads constructor(
         val tl = xy(P(d.rect.left, d.rect.top))
         val br = xy(P(d.rect.right, d.rect.bottom))
         val inHand = d.label.endsWith("• in hand")
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = if (d.danger) 6f else 4f
-        paint.color = when {
+        val color = when {
             d.danger -> Color.RED
-            inHand -> Color.rgb(255, 165, 0) // оранжевый — предмет в руке
+            inHand -> Color.rgb(255, 165, 0)
             else -> Color.GREEN
         }
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = if (d.danger) 6f else 4f
+        paint.color = color
         c.drawRect(min(tl.x, br.x), min(tl.y, br.y), max(tl.x, br.x), max(tl.y, br.y), paint)
         paint.style = Paint.Style.FILL
         text.textSize = 18f
-        text.color = paint.color
-        c.drawText(if (d.danger) "WEAPON %.2f".format(d.score) else "${d.label} %.2f".format(d.score),
-            min(tl.x, br.x), max(22f, min(tl.y, br.y) - 8f), text)
+        text.color = color
+        c.drawText(
+            if (d.danger) "DANGER %.2f".format(d.score)
+            else "${d.label} %.2f".format(d.score),
+            min(tl.x, br.x), max(22f, min(tl.y, br.y) - 8f), text
+        )
     }
 }
