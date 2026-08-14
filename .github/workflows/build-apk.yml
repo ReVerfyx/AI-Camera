@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -22,24 +24,11 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Download MediaPipe models
+      - name: Check large YOLO model
         shell: bash
         run: |
-          mkdir -p app/src/main/assets
-
-          curl -L --fail \
-            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" \
-            -o app/src/main/assets/face_landmarker.task
-
-          curl -L --fail \
-            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" \
-            -o app/src/main/assets/hand_landmarker.task
-
-          curl -L --fail \
-            "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task" \
-            -o app/src/main/assets/pose_landmarker_lite.task
-
-          ls -lh app/src/main/assets
+          ls -lh app/src/main/assets/yolov8x-oiv7.tflite
+          git lfs ls-files
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon
