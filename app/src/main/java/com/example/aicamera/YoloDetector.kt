@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.RectF
 import org.tensorflow.lite.Interpreter
+import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
@@ -15,14 +16,12 @@ class YoloDetector(context: Context) : AutoCloseable {
     private val labels: List<String>
 
     init {
-        val model = context.assets.open("yolov8x-oiv7.tflite").use { it.readBytes() }
-        interpreter = Interpreter(
-            ByteBuffer.allocateDirect(model.size).order(ByteOrder.nativeOrder()).apply {
-                put(model)
-                rewind()
-            },
-            Interpreter.Options().setNumThreads(4)
-        )
+        val afd = context.assets.openFd("yolov8x-oiv7.tflite")
+        val mapped = FileInputStream(afd.fileDescriptor).channel.use { channel ->
+            channel.map(java.nio.channels.FileChannel.MapMode.READ_ONLY, afd.startOffset, afd.declaredLength)
+        }
+        afd.close()
+        interpreter = Interpreter(mapped, Interpreter.Options().setNumThreads(4))
         val shape = interpreter.getInputTensor(0).shape()
         inputSize = if (shape.size >= 3) max(shape[1], shape[2]) else 640
         labels = runCatching {
@@ -58,15 +57,18 @@ class YoloDetector(context: Context) : AutoCloseable {
         input.rewind()
 
         val shape = interpreter.getOutputTensor(0).shape()
-        val a = shape.getOrNull(1) ?: return emptyList()
-        val b = shape.getOrNull(2) ?: return emptyList()
+        if (shape.size != 3) return emptyList()
+        val a = shape[1]
+        val b = shape[2]
         val channels: Int
         val count: Int
         val transposed: Boolean
         if (a <= 700) { channels = a; count = b; transposed = false }
         else { channels = b; count = a; transposed = true }
         if (channels < 6 || channels > 1000) return emptyList()
-        val output = Array(1) { Array(channels) { FloatArray(count) } }
+
+        // Keep the exact tensor layout expected by TFLite; value() handles both YOLO layouts.
+        val output = Array(1) { Array(a) { FloatArray(b) } }
         interpreter.run(input, output)
 
         val classes = channels - 4
@@ -118,7 +120,7 @@ class YoloDetector(context: Context) : AutoCloseable {
         return n.contains("handgun") || n.contains("rifle") || n.contains("shotgun") ||
             n.contains("knife") || n.contains("dagger") || n.contains("sword") ||
             n.contains("missile") || n.contains("bomb") || n.contains("cannon") ||
-            n.contains("axe") || n.contains("firearm") || n.contains("gun")
+            n.contains("axe") || n.contains("firearm") || n.contains("gun") || n == "weapon"
     }
 
     override fun close() = interpreter.close()
