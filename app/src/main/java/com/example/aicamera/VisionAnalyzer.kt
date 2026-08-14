@@ -21,32 +21,17 @@ class VisionAnalyzer(
     private val overlay: OverlayView
 ) : ImageAnalysis.Analyzer {
 
-    private val face = FaceLandmarker.createFromOptions(
-        context,
-        FaceLandmarker.FaceLandmarkerOptions.builder()
-            .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
-            .setRunningMode(RunningMode.VIDEO)
-            .setNumFaces(2)
-            .build()
-    )
+    private val face = FaceLandmarker.createFromOptions(context, FaceLandmarker.FaceLandmarkerOptions.builder()
+        .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
+        .setRunningMode(RunningMode.VIDEO).setNumFaces(2).build())
 
-    private val hands = HandLandmarker.createFromOptions(
-        context,
-        HandLandmarker.HandLandmarkerOptions.builder()
-            .setBaseOptions(BaseOptions.builder().setModelAssetPath("hand_landmarker.task").build())
-            .setRunningMode(RunningMode.VIDEO)
-            .setNumHands(4)
-            .build()
-    )
+    private val hands = HandLandmarker.createFromOptions(context, HandLandmarker.HandLandmarkerOptions.builder()
+        .setBaseOptions(BaseOptions.builder().setModelAssetPath("hand_landmarker.task").build())
+        .setRunningMode(RunningMode.VIDEO).setNumHands(4).build())
 
-    private val pose = PoseLandmarker.createFromOptions(
-        context,
-        PoseLandmarker.PoseLandmarkerOptions.builder()
-            .setBaseOptions(BaseOptions.builder().setModelAssetPath("pose_landmarker_lite.task").build())
-            .setRunningMode(RunningMode.VIDEO)
-            .setNumPoses(2)
-            .build()
-    )
+    private val pose = PoseLandmarker.createFromOptions(context, PoseLandmarker.PoseLandmarkerOptions.builder()
+        .setBaseOptions(BaseOptions.builder().setModelAssetPath("pose_landmarker_lite.task").build())
+        .setRunningMode(RunningMode.VIDEO).setNumPoses(2).build())
 
     private val yolo = YoloDetector(context)
     private val landmarkExecutor = Executors.newSingleThreadExecutor()
@@ -57,45 +42,33 @@ class VisionAnalyzer(
     @Volatile private var latestDetections: List<Detection> = emptyList()
     @Volatile private var lastYoloAt = 0L
     @Volatile private var latestInferenceFps = 0f
-
     private var fpsStart = SystemClock.elapsedRealtime()
     private var fpsFrames = 0
 
     override fun analyze(image: ImageProxy) {
+        val rotation = image.imageInfo.rotationDegrees
         val bitmap = try {
             image.toBitmap().copy(Bitmap.Config.ARGB_8888, false)
         } finally {
             image.close()
         }
-
-        val rotation = image.imageInfo.rotationDegrees
         val rotated = rotateBitmap(bitmap, rotation)
 
-        // Landmarks: always keep only one job in flight.
         if (landmarkBusy.compareAndSet(false, true)) {
             landmarkExecutor.execute {
-                try {
-                    analyzeLandmarks(rotated)
-                } catch (t: Throwable) {
-                    t.printStackTrace()
-                } finally {
-                    landmarkBusy.set(false)
-                }
+                try { analyzeLandmarks(rotated) }
+                catch (t: Throwable) { t.printStackTrace() }
+                finally { landmarkBusy.set(false) }
             }
         }
 
-        // YOLO X is intentionally throttled. The UI can remain smooth while the last boxes are reused.
         val now = SystemClock.elapsedRealtime()
         if (now - lastYoloAt >= 150L && yoloBusy.compareAndSet(false, true)) {
             lastYoloAt = now
             yoloExecutor.execute {
-                try {
-                    latestDetections = yolo.detect(rotated, scoreThreshold = 0.35f, iouThreshold = 0.45f)
-                } catch (t: Throwable) {
-                    t.printStackTrace()
-                } finally {
-                    yoloBusy.set(false)
-                }
+                try { latestDetections = yolo.detect(rotated, 0.35f, 0.45f) }
+                catch (t: Throwable) { t.printStackTrace() }
+                finally { yoloBusy.set(false) }
             }
         }
     }
@@ -103,7 +76,6 @@ class VisionAnalyzer(
     private fun analyzeLandmarks(bitmap: Bitmap) {
         val mpImage = BitmapImageBuilder(bitmap).build()
         val timestamp = SystemClock.elapsedRealtime()
-
         val faceResult = face.detectForVideo(mpImage, timestamp)
         val handResult = hands.detectForVideo(mpImage, timestamp)
         val poseResult = pose.detectForVideo(mpImage, timestamp)
@@ -124,14 +96,7 @@ class VisionAnalyzer(
 
         overlay.post {
             overlay.setSourceSize(bitmap.width, bitmap.height, mirrorX = true)
-            overlay.update(
-                faces = faces,
-                hands = handPoints,
-                poses = poses,
-                detections = latestDetections,
-                expression = expression,
-                fps = latestInferenceFps
-            )
+            overlay.update(faces, handPoints, poses, latestDetections, expression, latestInferenceFps)
         }
     }
 
@@ -143,17 +108,11 @@ class VisionAnalyzer(
 
     private fun classifyExpression(face: List<P>): String {
         if (face.size < 300) return "FACE"
-        val left = face[61]
-        val right = face[291]
-        val upper = face[13]
-        val lower = face[14]
-        val width = distance(left, right)
-        val height = distance(upper, lower)
+        val left = face[61]; val right = face[291]; val upper = face[13]; val lower = face[14]
+        val width = distance(left, right); val height = distance(upper, lower)
         if (width <= 0.001f) return "FACE"
         val ratio = height / width
-        val centerY = (upper.y + lower.y) / 2f
-        val cornersY = (left.y + right.y) / 2f
-        val cornersUp = centerY - cornersY
+        val cornersUp = (upper.y + lower.y) / 2f - (left.y + right.y) / 2f
         return when {
             cornersUp > 0.008f && width > 0.10f -> "SMILE :)"
             ratio > 0.28f -> "SURPRISED?"
@@ -162,17 +121,12 @@ class VisionAnalyzer(
     }
 
     private fun distance(a: P, b: P): Float {
-        val dx = a.x - b.x
-        val dy = a.y - b.y
+        val dx = a.x - b.x; val dy = a.y - b.y
         return sqrt(dx * dx + dy * dy)
     }
 
     fun close() {
-        landmarkExecutor.shutdownNow()
-        yoloExecutor.shutdownNow()
-        face.close()
-        hands.close()
-        pose.close()
-        yolo.close()
+        landmarkExecutor.shutdownNow(); yoloExecutor.shutdownNow()
+        face.close(); hands.close(); pose.close(); yolo.close()
     }
 }
