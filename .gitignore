@@ -1,0 +1,7 @@
+.gradle/
+.idea/
+build/
+**/build/
+*.iml
+local.properties
+app/src/main/assets/*.task
