@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -66,7 +68,7 @@ tasks.register("downloadOiv7Labels") {
     outputs.file(outFile)
     doLast {
         if (!outFile.exists()) {
-            val yaml = java.net.URI("https://raw.githubusercontent.com/ultralytics/ultralytics/main/ultralytics/cfg/datasets/open-images-v7.yaml").toURL().readText()
+            val yaml = URI("https://raw.githubusercontent.com/ultralytics/ultralytics/main/ultralytics/cfg/datasets/open-images-v7.yaml").toURL().readText()
             val labels = yaml.lineSequence()
                 .mapNotNull { line -> Regex("^\\s*(\\d+):\\s*(.+?)\\s*$").find(line)?.let { m -> m.groupValues[1].toInt() to m.groupValues[2].trim() } }
                 .sortedBy { it.first }
